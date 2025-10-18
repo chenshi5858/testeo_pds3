@@ -306,6 +306,45 @@ def _update_slide(class_id: str, new_index: int) -> dict | None:
     return class_record
 
 
+def process_control_action(class_id: str, action: str, index: int | None = None) -> dict | None:
+    """
+    Procesa una acción de control (next, prev, goto) y actualiza la diapositiva.
+    Retorna el class_record actualizado o None si hay error.
+    Esta función puede ser llamada desde WebSocket handlers o desde el bot de Telegram.
+    """
+    class_record = store.get_class(class_id)
+    if not class_record:
+        return None
+
+    if action not in {"next", "prev", "goto"}:
+        return None
+
+    current = class_record.get("current_slide", 0)
+    slides_total = (
+        class_record.get("total_slides")
+        or len(class_record.get("slides", []))
+        or _count_pdf_slides(class_id)
+    )
+
+    if action == "next":
+        current = min(current + 1, max(slides_total - 1, 0))
+    elif action == "prev":
+        current = max(current - 1, 0)
+    elif action == "goto":
+        if isinstance(index, int):
+            current = max(0, min(index, max(slides_total - 1, 0)))
+
+    updated = _update_slide(class_id, current)
+    if updated:
+        # Emitir evento a todos los clientes conectados a esta clase
+        socketio.emit(
+            "slide_update",
+            {"classId": class_id, "currentSlide": updated["current_slide"]},
+            room=class_id,
+        )
+    return updated
+
+
 @socketio.on("connect")
 def handle_connect():
     emit("connected", {"message": "socket connected"})
@@ -336,40 +375,15 @@ def handle_leave(data):
 def handle_control_action(data):
     class_id = data.get("classId")
     action = data.get("action")
+    index = data.get("index")
+    
     if not class_id or action not in {"next", "prev", "goto"}:
         emit("error", {"error": "invalid control action"})
         return
 
-    class_record = store.get_class(class_id)
-    if not class_record:
-        emit("error", {"error": "class not found"})
-        return
-
-    current = class_record.get("current_slide", 0)
-    slides_total = (
-        class_record.get("total_slides")
-        or len(class_record.get("slides", []))
-        or _count_pdf_slides(class_id)
-    )
-
-    if action == "next":
-        current = min(current + 1, max(slides_total - 1, 0))
-    elif action == "prev":
-        current = max(current - 1, 0)
-    elif action == "goto":
-        target = data.get("index")
-        if isinstance(target, int):
-            current = max(0, min(target, max(slides_total - 1, 0)))
-
-    updated = _update_slide(class_id, current)
+    updated = process_control_action(class_id, action, index)
     if updated is None:
         emit("error", {"error": "unable to update slide"})
-        return
-    socketio.emit(
-        "slide_update",
-        {"classId": class_id, "currentSlide": updated["current_slide"]},
-        room=class_id,
-    )
 
 
 def _count_pdf_slides(class_id: str) -> int:
@@ -388,7 +402,12 @@ async def start_telegram_bot():
 
     try:
         from telegram_bot import TelegramBot
-        telegram_bot_instance = TelegramBot(TELEGRAM_BOT_TOKEN, socketio, store)
+        telegram_bot_instance = TelegramBot(
+            TELEGRAM_BOT_TOKEN, 
+            socketio, 
+            store,
+            process_control_action
+        )
         await telegram_bot_instance.start_bot()
         app.logger.info("Telegram bot initialized successfully")
     except Exception as exc:

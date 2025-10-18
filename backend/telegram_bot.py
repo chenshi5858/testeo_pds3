@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TelegramBot:
     """Bot de Telegram para control de presentaciones."""
 
-    def __init__(self, token: str, socketio_instance, class_store):
+    def __init__(self, token: str, socketio_instance, class_store, control_action_func):
         """
         Inicializa el bot de Telegram.
         
@@ -22,10 +22,12 @@ class TelegramBot:
             token: Token del bot de Telegram (obtener de @BotFather)
             socketio_instance: Instancia de SocketIO para emitir eventos
             class_store: Instancia de ClassStore para acceder a las clases
+            control_action_func: Función para procesar acciones de control (next, prev, goto)
         """
         self.token = token
         self.socketio = socketio_instance
         self.store = class_store
+        self.control_action = control_action_func
         self.application = None
         self.active_classes = {}  # {chat_id: class_id}
 
@@ -107,18 +109,16 @@ class TelegramBot:
             await update.message.reply_text("⚠️ Primero selecciona una clase con /select <ID>")
             return
 
-        # Emitir evento de control via SocketIO
-        self.socketio.emit(
-            "control_action",
-            {"classId": class_id, "action": "next"},
-            to=class_id,
-        )
+        # Procesar acción de control directamente
+        updated = self.control_action(class_id, "next")
         
-        class_data = self.store.get_class(class_id)
-        await update.message.reply_text(
-            f"➡️ Siguiente diapositiva\n"
-            f"Actual: {class_data.get('current_slide', 0)}/{class_data.get('total_slides', 0)}"
-        )
+        if updated:
+            await update.message.reply_text(
+                f"➡️ Siguiente diapositiva\n"
+                f"Actual: {updated.get('current_slide', 0)}/{updated.get('total_slides', 0)}"
+            )
+        else:
+            await update.message.reply_text("❌ Error al avanzar diapositiva")
 
     async def prev_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /prev - Retrocede a la diapositiva anterior."""
@@ -129,17 +129,16 @@ class TelegramBot:
             await update.message.reply_text("⚠️ Primero selecciona una clase con /select <ID>")
             return
 
-        self.socketio.emit(
-            "control_action",
-            {"classId": class_id, "action": "prev"},
-            to=class_id,
-        )
+        # Procesar acción de control directamente
+        updated = self.control_action(class_id, "prev")
         
-        class_data = self.store.get_class(class_id)
-        await update.message.reply_text(
-            f"⬅️ Diapositiva anterior\n"
-            f"Actual: {class_data.get('current_slide', 0)}/{class_data.get('total_slides', 0)}"
-        )
+        if updated:
+            await update.message.reply_text(
+                f"⬅️ Diapositiva anterior\n"
+                f"Actual: {updated.get('current_slide', 0)}/{updated.get('total_slides', 0)}"
+            )
+        else:
+            await update.message.reply_text("❌ Error al retroceder diapositiva")
 
     async def goto_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /goto - Va a una diapositiva específica."""
@@ -160,13 +159,16 @@ class TelegramBot:
             await update.message.reply_text("❌ El número de diapositiva debe ser un entero.")
             return
 
-        self.socketio.emit(
-            "control_action",
-            {"classId": class_id, "action": "goto", "index": slide_number},
-            to=class_id,
-        )
+        # Procesar acción de control directamente
+        updated = self.control_action(class_id, "goto", slide_number)
         
-        await update.message.reply_text(f"🎯 Ir a diapositiva {slide_number}")
+        if updated:
+            await update.message.reply_text(
+                f"🎯 Ir a diapositiva {slide_number}\n"
+                f"Actual: {updated.get('current_slide', 0)}/{updated.get('total_slides', 0)}"
+            )
+        else:
+            await update.message.reply_text("❌ Error al cambiar de diapositiva")
 
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /status - Muestra el estado actual de la clase seleccionada."""
@@ -207,20 +209,24 @@ class TelegramBot:
         action, class_id = data.split("_", 1)
 
         if action == "next":
-            self.socketio.emit(
-                "control_action",
-                {"classId": class_id, "action": "next"},
-                to=class_id,
-            )
-            await query.edit_message_text("➡️ Siguiente diapositiva")
+            updated = self.control_action(class_id, "next")
+            if updated:
+                await query.edit_message_text(
+                    f"➡️ Siguiente diapositiva\n"
+                    f"Actual: {updated.get('current_slide', 0)}/{updated.get('total_slides', 0)}"
+                )
+            else:
+                await query.edit_message_text("❌ Error al avanzar")
 
         elif action == "prev":
-            self.socketio.emit(
-                "control_action",
-                {"classId": class_id, "action": "prev"},
-                to=class_id,
-            )
-            await query.edit_message_text("⬅️ Diapositiva anterior")
+            updated = self.control_action(class_id, "prev")
+            if updated:
+                await query.edit_message_text(
+                    f"⬅️ Diapositiva anterior\n"
+                    f"Actual: {updated.get('current_slide', 0)}/{updated.get('total_slides', 0)}"
+                )
+            else:
+                await query.edit_message_text("❌ Error al retroceder")
 
         elif action == "status":
             class_data = self.store.get_class(class_id)
