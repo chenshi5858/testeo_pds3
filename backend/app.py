@@ -1,4 +1,6 @@
+import base64
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -11,6 +13,12 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from pptx import Presentation
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "storage"
@@ -52,7 +60,7 @@ def create_socketio(flask_app: Flask) -> SocketIO:
     return SocketIO(
         flask_app,
         cors_allowed_origins="*",
-        async_mode="eventlet",
+        async_mode="threading",
     )
 
 
@@ -306,6 +314,26 @@ def _update_slide(class_id: str, new_index: int) -> dict | None:
     return class_record
 
 
+def _build_presentation_payload(class_record: dict, *, include_pdf: bool = False) -> dict:
+    pdf_base64: str | None = None
+    if include_pdf:
+        pdf_path = CONVERSION_DIR / f"{class_record['id']}.pdf"
+        try:
+            pdf_bytes = pdf_path.read_bytes()
+            pdf_base64 = base64.b64encode(pdf_bytes).decode("ascii")
+        except OSError:
+            pdf_base64 = None
+
+    return {
+        "classId": class_record.get("id"),
+        "title": class_record.get("title"),
+        "slides": class_record.get("slides", []),
+        "totalSlides": class_record.get("total_slides"),
+        "currentSlide": class_record.get("current_slide"),
+        "pdfBase64": pdf_base64,
+    }
+
+
 def process_control_action(class_id: str, action: str, index: int | None = None) -> dict | None:
     """
     Procesa una acción de control (next, prev, goto) y actualiza la diapositiva.
@@ -337,16 +365,19 @@ def process_control_action(class_id: str, action: str, index: int | None = None)
     updated = _update_slide(class_id, current)
     if updated:
         # Emitir evento a todos los clientes conectados a esta clase
-        socketio.emit(
-            "slide_update",
-            {"classId": class_id, "currentSlide": updated["current_slide"]},
-            room=class_id,
-        )
+        app.logger.info(f"Emitting slide_update to room {class_id}: currentSlide={updated['current_slide']}")
+        payload = {"classId": class_id, "currentSlide": updated["current_slide"]}
+        socketio.emit("slide_update", payload, room=class_id)
+        socketio.emit("slide_update", payload)
+        app.logger.info(f"slide_update emitted successfully")
+        socketio.emit("presentation_data", _build_presentation_payload(updated, include_pdf=False), room=class_id)
+        socketio.emit("presentation_data", _build_presentation_payload(updated, include_pdf=False))
     return updated
 
 
 @socketio.on("connect")
 def handle_connect():
+    app.logger.info(f"Client connected: {request.sid}")
     emit("connected", {"message": "socket connected"})
 
 
@@ -356,11 +387,14 @@ def handle_join(data):
     if not class_id:
         emit("error", {"error": "classId is required"})
         return
+    app.logger.info(f"Client {request.sid} joining room: {class_id}")
     join_room(class_id)
     emit("joined", {"classId": class_id})
     class_record = store.get_class(class_id)
     if class_record:
+        app.logger.info(f"Sending initial slide to client {request.sid}: {class_record['current_slide']}")
         emit("slide_update", {"classId": class_id, "currentSlide": class_record["current_slide"]})
+        emit("presentation_data", _build_presentation_payload(class_record, include_pdf=True))
 
 
 @socketio.on("leave_class")
@@ -384,6 +418,19 @@ def handle_control_action(data):
     updated = process_control_action(class_id, action, index)
     if updated is None:
         emit("error", {"error": "unable to update slide"})
+
+
+@socketio.on("request_presentation")
+def handle_request_presentation(data):
+    class_id = data.get("classId")
+    if not class_id:
+        emit("error", {"error": "classId is required"})
+        return
+    class_record = store.get_class(class_id)
+    if not class_record:
+        emit("error", {"error": "class not found"})
+        return
+    emit("presentation_data", _build_presentation_payload(class_record, include_pdf=True))
 
 
 def _count_pdf_slides(class_id: str) -> int:
@@ -429,4 +476,4 @@ if __name__ == "__main__":
             loop.run_forever()
         threading.Thread(target=run_async_loop, daemon=True).start()
     
-    socketio.run(app, host="0.0.0.0", port=5000)
+    socketio.run(app, host="0.0.0.0", port=5000, allow_unsafe_werkzeug=True)

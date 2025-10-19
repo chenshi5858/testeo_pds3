@@ -17,6 +17,8 @@ const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
   const [error, setError] = useState<string | null>(null);
   const deckRef = useRef<Reveal.Api | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const pendingSlideRef = useRef<number | null>(null);
+  const [deckReady, setDeckReady] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -78,7 +80,7 @@ const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
     
     if (!deckRef.current) {
       console.log('PresentationDeck: inicializando Reveal.js con', images.length, 'slides');
-      const deck = new Reveal(containerRef.current, {
+  const deck = new Reveal(containerRef.current, {
         embedded: true,
         controls: true,
         progress: true,
@@ -110,7 +112,10 @@ const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
       deck.initialize().then(() => {
         console.log('PresentationDeck: Reveal.js inicializado correctamente');
         deckRef.current = deck;
-        deck.slide(currentSlide);
+        const targetSlide = pendingSlideRef.current ?? currentSlide;
+        pendingSlideRef.current = null;
+        deck.slide(targetSlide);
+        setDeckReady(true);
       }).catch((initError: Error) => {
         console.error('PresentationDeck: error al inicializar Reveal.js', initError);
       });
@@ -125,17 +130,27 @@ const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
         (deckRef.current as any).destroy();
         deckRef.current = null;
       }
+      setDeckReady(false);
     };
   }, [images]);
 
   useEffect(() => {
     if (!deckRef.current) {
+      pendingSlideRef.current = currentSlide;
       console.log('PresentationDeck: esperando inicialización de Reveal antes de cambiar slide');
       return;
     }
-    console.log('PresentationDeck: cambiando a slide', currentSlide);
-    deckRef.current.slide(currentSlide);
-  }, [currentSlide]);
+    console.log('PresentationDeck: cambiando a slide', currentSlide, 'deckReady:', deckReady);
+    try {
+      deckRef.current.slide(currentSlide);
+      deckRef.current.sync();
+      if (typeof (deckRef.current as any).layout === 'function') {
+        (deckRef.current as any).layout();
+      }
+    } catch (slideError) {
+      console.error('PresentationDeck: error al cambiar de slide', slideError);
+    }
+  }, [currentSlide, deckReady]);
 
   return (
     <div className="card">
