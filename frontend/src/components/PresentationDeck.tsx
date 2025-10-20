@@ -9,9 +9,10 @@ GlobalWorkerOptions.workerSrc = pdfWorker;
 interface Props {
   pdfUrl: string;
   currentSlide: number;
+  onSlideChange?: (index: number) => void;
 }
 
-const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
+const PresentationDeck = ({ pdfUrl, currentSlide, onSlideChange }: Props) => {
   const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +117,14 @@ const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
         pendingSlideRef.current = null;
         deck.slide(targetSlide);
         setDeckReady(true);
+
+        deck.on('slidechanged', (event: { indexh: number; indexv: number }) => {
+          console.log('Slide changed:', event.indexh);
+          if (onSlideChange) {
+            onSlideChange(event.indexh);
+          }
+        });
+
       }).catch((initError: Error) => {
         console.error('PresentationDeck: error al inicializar Reveal.js', initError);
       });
@@ -152,9 +161,31 @@ const PresentationDeck = ({ pdfUrl, currentSlide }: Props) => {
     }
   }, [currentSlide, deckReady]);
 
+  const toggleFullscreen = () => {
+    const elem = containerRef.current;
+    if (!elem) return;
+
+    if (!document.fullscreenElement) {
+      elem.requestFullscreen().catch(err => {
+        console.error('Error al entrar en pantalla completa:', err);
+      });
+    } else {
+      document.exitFullscreen().catch(err => {
+        console.error('Error al salir de pantalla completa:', err);
+      });
+    }
+  };
+
   return (
     <div className="card">
-      <h2>Presentación</h2>
+      <div style={{ display:'flex', justifyContent:'space-between' }}>
+        <h2>Presentación</h2>
+        {!loading && !error && (
+          <button onClick={toggleFullscreen} style={{ padding: '6px 12px', cursor: 'pointer' }}>
+            Pantalla completa
+          </button>
+        )}
+      </div>
       {loading && <p>Cargando presentación…</p>}
       {error && (
         <div>

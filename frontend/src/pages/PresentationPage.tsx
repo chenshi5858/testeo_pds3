@@ -140,6 +140,15 @@ const PresentationPage = () => {
 
   const effectivePdfUrl = pdfUrl ?? (classData ? `${API_BASE_URL}${classData.pdf_path}` : null);
 
+  const handleLocalSlideChange = (newIndex: number) => {
+    console.log('User manually changed slide -> emitting:', newIndex);
+    //setCurrentSlide(newIndex); // keep local state synced
+
+    if (socket && connected && classId) {
+      socket.emit('control_action', { classId, action:'goto', index: newIndex });
+    }
+  };
+
   return (
     <main className="layout">
       <header className="header">
@@ -149,7 +158,7 @@ const PresentationPage = () => {
       {loading && <p>Cargando…</p>}
       {error && <p className="error">{error}</p>}
       {classData && effectivePdfUrl && (
-        <PresentationDeck pdfUrl={effectivePdfUrl} currentSlide={currentSlide} />
+        <PresentationDeck pdfUrl={effectivePdfUrl} currentSlide={currentSlide} onSlideChange={handleLocalSlideChange} />
       )}
     </main>
   );
